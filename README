@@ -1,0 +1,8 @@
+ttyrecTV
+========
+
+ttyrecTV will allow ttyrecord files to be displayed, flipping every couple 
+of seconds between "active" channels.
+
+The idea is that this may be useful during capture the flag activities.
+

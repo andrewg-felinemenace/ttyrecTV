@@ -66,7 +66,6 @@ module FileHandler
 			ts = Float(t1) + (Float(t2) / 1000000)
 			@basets ||= ts 
 			adj_ts = ts - @basets
-			@basets = ts
 
 			$logger.debug("length is #{len}, adjusted timestamp is #{adj_ts}")
 		
@@ -129,27 +128,28 @@ class MovieMaker
 
 		max = clip.length
 		prev = 0
-		clip.each { |timestamp, data|
-			delay = timestamp - prev
-
-			# puts "data is #{data.class}"
+		clip.each { |delay, data|
 			$logger.debug("delay of #{delay}, data.length = #{data.length}")
 			print data
 
 			select(nil, nil, nil, delay)
-			prev = timestamp
 		}
 
 	end
 
 	def make_clip(filename, frames)
+		# XXX, yucky :p
+
 		$logger.debug("Making clips from #{filename}")	
 		clips = []
 		base = frames[0][0]
-		prev = 0
+		prev = base / SECONDS
+		prevts = frames[0][0]
 
 		clip = []
 		frames.each { |ts, data|
+			$logger.debug("prevts = #{prevts}, ts is #{ts}")
+
 			idx = (ts - base) / SECONDS
 			idx = idx.round
 
@@ -165,7 +165,8 @@ class MovieMaker
 				clip = []
 			end
 
-			clip << [ts, data]
+			clip << [ts - prevts, data]
+			prevts = ts
 		}
 
 		puts clips.inspect

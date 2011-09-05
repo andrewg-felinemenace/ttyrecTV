@@ -196,6 +196,7 @@ class MovieMaker
 				clips, ctd = make_clips(k, v)
 
 				clips.each { |clip| 
+					$logger.debug("got a clip of #{clip.length} frames...")
 					@clips.push(clip)
 				}
 
@@ -243,8 +244,8 @@ class MoviePlayer < EventMachine::Connection
 
 			clip.each { |delay, data|
 				$logger.debug("delay of #{delay}, data.length = #{data.length}")
-				select(nil, nil, nil, delay * 0.85)
 				send_data(data)
+				select(nil, nil, nil, delay * 0.50)
 			}
 		end
 

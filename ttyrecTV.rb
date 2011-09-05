@@ -107,7 +107,7 @@ module FileHandler
 	end
 end
 
-SECONDS = 5
+SECONDS = 30
 
 # MovieMaker produces an 30 second clip from upto 6 different sessions
 # of upto 30 seconds length compressed down to all fit in 30 seconds
@@ -193,7 +193,7 @@ class MovieMaker
 
 				next if ((stop - start) < SECONDS)
 
-				clips, ftd = make_clips(k, v)
+				clips, ctd = make_clips(k, v)
 
 				clips.each { |clip| 
 					@clips.push(clip)
@@ -202,10 +202,15 @@ class MovieMaker
 				# XXX, fix me
 				# need to make all clip / frame access 
 				# thread safe sooner or later :)
-				ftd.times { v.delete(0) } 
+				
+				$logger.debug("ctd = #{ctd}, v.length = #{v.length}")
+				ctd.times { v.shift() }
+				$logger.debug("v.length is now #{v.length}")
+
+				@partial[k] = v
 			}
 
-			select(nil, nil, nil, 5)
+			select(nil, nil, nil, 0.5)
 
 		end
 	end
@@ -226,17 +231,20 @@ end
 class MoviePlayer < EventMachine::Connection
 	def play_movie
 		while(true) do
-			# XXX, reset the terminal
+			# producer/consumer might be better, @MM pushes us
+			# a clip to display, etc. can schedule a write later
+
+			$logger.debug("Waiting for new movie clip")
 			clip = @MM.get_movie()
+			$logger.debug("got new movie clip, resetting client")
 
 			send_data("\x1b\x5b2J") # reset screen
 			send_data("\x1b\x5bH") # move to home
 
 			clip.each { |delay, data|
 				$logger.debug("delay of #{delay}, data.length = #{data.length}")
+				select(nil, nil, nil, delay * 0.85)
 				send_data(data)
-
-				select(nil, nil, nil, delay / 6)
 			}
 		end
 

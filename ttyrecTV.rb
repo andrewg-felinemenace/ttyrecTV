@@ -77,8 +77,8 @@ module FileHandler
 
 			@offset += 12 + len
 
-			# well, I lied.
-			@MM.add_frames(path, [ adj_ts, data ])
+			@TS.queue.push([ adj_ts, data ])
+
 		end
 
 		fp.close()
@@ -89,7 +89,7 @@ module FileHandler
 	def initialize
 		@offset = 0
 		@lock = Mutex.new
-		@MM = MovieMaker.instance
+		@TS = TimeFilter.new(path)
 	end
 
 	def file_modified
@@ -103,127 +103,72 @@ module FileHandler
 	end
 
 	def unbind
-		@MM.delete_movie(path)
+		@TS.queue << nil # indicate EOF
 	end
 end
 
 SECONDS = 30
 
+class TimeFilter
+	attr_accessor :queue
+	def initialize(name)
+		@queue = Queue.new()
+		@MM = MovieMaker.instance
+		@name = name
+
+		Thread.new { filter_queue }
+	end
+
+	def filter_queue()
+		clips = [] 
+
+		while(true) 
+			timestamp, data = @queue.pop()
+			break if timestamp.nil?
+
+			# Keep a record of the first timestamp
+			prev_ts ||= timestamp
+
+			# Convert to relative time stamp for delaying
+			adj_ts = timestamp - prev_ts
+
+			# Keep SECONDS window of frames
+			past ||= (timestamp / SECONDS).floor
+			cur = (timestamp / SECONDS).floor
+
+			if(cur > past) then
+				send_to_movie_maker(clips)
+
+				clips = []
+				past = cur
+			end
+
+			clips << [ adj_ts, data ] 
+
+			prev_ts = timestamp
+		end
+
+		send_to_movie_maker(clips) if clips.length > 0
+
+		$logger.debug("TimeFilter -- got EOF")
+	end
+
+	def send_to_movie_maker(clip)
+		# queue on MovieMaker
+		$logger.debug("Queuing clip into MovieMaker")
+		@MM.clips << clip
+	end
+
+end
+
 # MovieMaker produces an 30 second clip from upto 6 different sessions
 # of upto 30 seconds length compressed down to all fit in 30 seconds
 class MovieMaker
 	include Singleton
-
-	def delete_movie(filename)
-		@partial.delete(filename)
-	end
-
-	def add_frames(filename, frames)
-		$logger.debug("adding frames to MovieMaker")
-		@partial[filename] << frames
-	end
-
-	def debug_clip(clip)
-		$logger.debug("okay, clip is #{clip.class}, with #{clip.length} entries")
-
-		max = clip.length
-		prev = 0
-		clip.each { |delay, data|
-			$logger.debug("delay of #{delay}, data.length = #{data.length}")
-			print data
-
-			select(nil, nil, nil, delay / 6)
-		}
-
-	end
-
-	def make_clips(filename, frames)
-		# XXX, yucky :p
-
-		$logger.debug("Making clips from #{filename}")	
-		clips = []
-		base = frames[0][0]
-		prev = base / SECONDS
-		prevts = frames[0][0]
-
-		ctd = 0
-		clip = []
-		frames.each { |ts, data|
-			$logger.debug("prevts = #{prevts}, ts is #{ts}")
-
-			idx = (ts - base) / SECONDS
-			idx = idx.round
-
-			$logger.debug("index of #{idx}")
-
-			if(idx > prev) then
-				prev = idx
-				# yay, full clip
-				$logger.debug("full clip!")
-		
-				# Keep track of how many need to be deleted
-				ctd += clip.length
-				clips << clip
-				clip = []
-
-			end
-
-			clip << [ts - prevts, data]
-			prevts = ts
-		}
-
-		# puts clips.inspect
-
-		# play clip
-		#clips.each { |clip|
-		#	debug_clip(clip)
-		#}
-
-		return clips, ctd
-
-	end
-
-	def make_movies()
-		while (true)
-			@partial.each { |k, v| 
-				start = v[0][0]
-				stop = v[-1][0]
-
-				$logger.debug("#{k} #{stop} - #{start} = #{stop - start}")
-
-				next if ((stop - start) < SECONDS)
-
-				clips, ctd = make_clips(k, v)
-
-				clips.each { |clip| 
-					$logger.debug("got a clip of #{clip.length} frames...")
-					@clips.push(clip)
-				}
-
-				# XXX, fix me
-				# need to make all clip / frame access 
-				# thread safe sooner or later :)
-				
-				$logger.debug("ctd = #{ctd}, v.length = #{v.length}")
-				ctd.times { v.shift() }
-				$logger.debug("v.length is now #{v.length}")
-
-				@partial[k] = v
-			}
-
-			select(nil, nil, nil, 0.5)
-
-		end
-	end
-
-	def get_movie()
-		return @clips.pop()
-	end
+	attr_accessor :clips
 
 	def initialize
-		@partial = Hash.new { |h, k| h[k] = [] }
 		@clips = Queue.new()
-		Thread.new { make_movies() }
 	end
 
 end
@@ -236,7 +181,7 @@ class MoviePlayer < EventMachine::Connection
 			# a clip to display, etc. can schedule a write later
 
 			$logger.debug("Waiting for new movie clip")
-			clip = @MM.get_movie()
+			clip = @MM.clips.pop()
 			$logger.debug("got new movie clip, resetting client")
 
 			send_data("\x1b\x5b2J") # reset screen

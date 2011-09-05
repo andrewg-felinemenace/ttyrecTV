@@ -19,7 +19,7 @@ def scan_processes()
 	active = []
 
 	Dir['/proc/*/cmdline'].each { |file|
-		argv = open(file, "r").read().split("\x00")
+		argv = open(file, "r").read().split("\x00") rescue next
 		next unless argv[0] == "ttyrec" 
 
 		# XXX, extra sanity checking required.
@@ -42,9 +42,11 @@ def scan_processes()
 	old = $seen.keys() - active
 
 	old.each { |filename| 
-		$logger.debug("ttyrec stopped on (#{filename})")
-		# XXX $seen[filename].stop_watching()
-		$seen.delete(filename)
+		EM.next_tick {
+			$logger.debug("ttyrec stopped on (#{filename})")
+			$seen[filename].stop_watching()
+			$seen.delete(filename)
+		}
 	}
 
 end
@@ -61,18 +63,23 @@ module FileHandler
 
 			t1, t2, len = header.unpack("VVV")
 		
-			ts = t1 + (t2 / 1000000)
-			$logger.debug("length is #{len}, timestamp is #{ts}")
+			ts = Float(t1) + (Float(t2) / 1000000)
+			@basets ||= ts 
+			adj_ts = ts - @basets
+			@basets = ts
+
+			$logger.debug("length is #{len}, adjusted timestamp is #{adj_ts}")
 		
+
 			data = fp.read(len)
 			return if data.nil?
 
-			print data
+			#print data
 
 			@offset += 12 + len
 
 			# well, I lied.
-			@MM.add_frames(path, [ ts, data ])
+			@MM.add_frames(path, [ adj_ts, data ])
 		end
 
 		fp.close()
@@ -90,11 +97,9 @@ module FileHandler
 		$logger.debug("#{path} modified")
 		Thread.new { 
 			# Not entirely race proof
-			return if @lock.locked?
-
-			@lock.synchronize {
+			if(@lock.try_lock()) then
 				process_frames() 
-			}
+			end
 		}
 	end
 
@@ -119,20 +124,79 @@ class MovieMaker
 		@partial[filename] << frames
 	end
 
+	def debug_clip(clip)
+		$logger.debug("okay, clip is #{clip.class}, with #{clip.length} entries")
+
+		max = clip.length
+		prev = 0
+		clip.each { |timestamp, data|
+			delay = timestamp - prev
+
+			# puts "data is #{data.class}"
+			$logger.debug("delay of #{delay}, data.length = #{data.length}")
+			print data
+
+			select(nil, nil, nil, delay)
+			prev = timestamp
+		}
+
+	end
+
+	def make_clip(filename, frames)
+		$logger.debug("Making clips from #{filename}")	
+		clips = []
+		base = frames[0][0]
+		prev = 0
+
+		clip = []
+		frames.each { |ts, data|
+			idx = (ts - base) / SECONDS
+			idx = idx.round
+
+			$logger.debug("index of #{idx}")
+
+			if(idx > prev) then
+				prev = idx
+				# yay, full clip
+				$logger.debug("full clip!")
+		
+				# XXX, rewrite		
+				clips << clip
+				clip = []
+			end
+
+			clip << [ts, data]
+		}
+
+		puts clips.inspect
+
+		# Calculate frames to delete
+		ctd = 0
+		clips.each { |clip|
+			ctd += clip.length # frame length
+		}		
+
+		# play clip
+		clips.each { |clip|
+			debug_clip(clip)
+		}
+
+	end
+
 	def make_movies()
 		while (true)
 			@partial.each { |k, v| 
 				start = v[0][0]
 				stop = v[-1][0]
 
-				$logger.debug("#{filename} #{stop} - #{start} = #{stop - start}")
+				$logger.debug("#{k} #{stop} - #{start} = #{stop - start}")
 
 				next if ((stop - start) < SECONDS)
 
-				$logger.debug("Producing 30 sec clip")
 
-				# bail if none found
-				# delete upto / 30 second, leave rest
+				clip, ftd = make_clip(k, v)				
+				# delete first ftd frames
+
 			}
 
 			select(nil, nil, nil, 5)
@@ -159,12 +223,15 @@ class MoviePlayer < EventMachine::Connection
 	def receive_data(data)
 		# should not be sent data, so hang up ?
 	end
+
+	def unbind()
+		# unregister consumation :>
+	end
 end
 
 EventMachine::run do
 	EventMachine::add_periodic_timer(2) do
-		# XXX, run in thread :)
-		scan_processes()
+		Thread.new { scan_processes() }
 	end
 
 	EventMachine::start_server("0.0.0.0", 10000, MoviePlayer)

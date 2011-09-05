@@ -51,8 +51,15 @@ def scan_processes()
 
 end
 
+# FileHandler is responsible for reading from the ttyrec files and sending
+# each frame off to the TimeFilter thread.
+#
+# XXX - convert this to pure reading and not use notification.. bit racy etc.
+#
+# This converts from absolute time of day format to relative to beginning of
+# file.
+
 module FileHandler
-	# offset = ?
 	def process_frames
 		fp = open(path, "r")
 		fp.seek(@offset)
@@ -63,13 +70,13 @@ module FileHandler
 
 			t1, t2, len = header.unpack("VVV")
 		
-			ts = Float(t1) + (Float(t2) / 1000000)
+			ts = Float(t1) + (Float(t2) / 1000000) # XXX, Float?
+
 			@basets ||= ts 
 			adj_ts = ts - @basets
 
 			$logger.debug("length is #{len}, adjusted timestamp is #{adj_ts}")
 		
-
 			data = fp.read(len)
 			return if data.nil?
 
@@ -119,12 +126,19 @@ class TimeFilter
 		Thread.new { filter_queue }
 	end
 
+	# filter_queue reads from a file-reader Queue and divides those
+	# into chunks based on relative timestamp / SECONDS. Those are
+	# a suitable clip for movie maker to dosh out. 
+	#
+	# It also converts from relative time stamps to delay based (delay
+	# needed to sleep for proper play back)
+
 	def filter_queue()
 		clips = [] 
 
 		while(true) 
 			timestamp, data = @queue.pop()
-			break if timestamp.nil?
+			break if timestamp.nil?	# End of File :>
 
 			# Keep a record of the first timestamp
 			prev_ts ||= timestamp
@@ -156,19 +170,46 @@ class TimeFilter
 	def send_to_movie_maker(clip)
 		# queue on MovieMaker
 		$logger.debug("Queuing clip into MovieMaker")
-		@MM.clips << clip
+		@MM.push(clip)
 	end
 
 end
 
-# MovieMaker produces an 30 second clip from upto 6 different sessions
-# of upto 30 seconds length compressed down to all fit in 30 seconds
+#
+# MovieMaker is responsible for distributing the clips to MoviePlayer 
+# instances, ensuring that there is something in the queue if there are
+# readers, etc.
+#
+
 class MovieMaker
 	include Singleton
 	attr_accessor :clips
 
 	def initialize
 		@clips = Queue.new()
+		@oldclips = []
+		Thread.new { play_old_clips }
+	end
+
+	def push(item)
+		@clips.push(item)
+
+		@oldclips.shift() if @oldclips.length >= 8
+		@oldclips.push(item)
+	end
+
+	def play_old_clips
+		while(true)
+			select(nil, nil, nil, 1)
+			if(@clips.empty?) then
+				next if @oldclips.size == 0
+
+				@clips.num_waiting().times do
+					@clips.push(@oldclips[rand(@oldclips.size)])
+				end
+			end
+
+		end
 	end
 
 end

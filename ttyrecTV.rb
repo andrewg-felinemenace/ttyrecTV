@@ -132,12 +132,12 @@ class MovieMaker
 			$logger.debug("delay of #{delay}, data.length = #{data.length}")
 			print data
 
-			select(nil, nil, nil, delay)
+			select(nil, nil, nil, delay / 6)
 		}
 
 	end
 
-	def make_clip(filename, frames)
+	def make_clips(filename, frames)
 		# XXX, yucky :p
 
 		$logger.debug("Making clips from #{filename}")	
@@ -146,6 +146,7 @@ class MovieMaker
 		prev = base / SECONDS
 		prevts = frames[0][0]
 
+		ctd = 0
 		clip = []
 		frames.each { |ts, data|
 			$logger.debug("prevts = #{prevts}, ts is #{ts}")
@@ -160,27 +161,25 @@ class MovieMaker
 				# yay, full clip
 				$logger.debug("full clip!")
 		
-				# XXX, rewrite		
+				# Keep track of how many need to be deleted
+				ctd += clip.length
 				clips << clip
 				clip = []
+
 			end
 
 			clip << [ts - prevts, data]
 			prevts = ts
 		}
 
-		puts clips.inspect
-
-		# Calculate frames to delete
-		ctd = 0
-		clips.each { |clip|
-			ctd += clip.length # frame length
-		}		
+		# puts clips.inspect
 
 		# play clip
-		clips.each { |clip|
-			debug_clip(clip)
-		}
+		#clips.each { |clip|
+		#	debug_clip(clip)
+		#}
+
+		return clips, ctd
 
 	end
 
@@ -194,19 +193,30 @@ class MovieMaker
 
 				next if ((stop - start) < SECONDS)
 
+				clips, ftd = make_clips(k, v)
 
-				clip, ftd = make_clip(k, v)				
-				# delete first ftd frames
+				clips.each { |clip| 
+					@clips.push(clip)
+				}
 
+				# XXX, fix me
+				# need to make all clip / frame access 
+				# thread safe sooner or later :)
+				ftd.times { v.delete(0) } 
 			}
 
 			select(nil, nil, nil, 5)
+
 		end
+	end
+
+	def get_movie()
+		return @clips.pop()
 	end
 
 	def initialize
 		@partial = Hash.new { |h, k| h[k] = [] }
-		@clips = []
+		@clips = Queue.new()
 		Thread.new { make_movies() }
 	end
 
@@ -214,19 +224,32 @@ end
 
 # MoviePlayer fetches movies and streams them to the client. 
 class MoviePlayer < EventMachine::Connection
+	def play_movie
+		while(true) do
+			# XXX, reset the terminal
+			clip = @MM.get_movie()
+
+			send_data("\x1b\x5b2J") # reset screen
+			send_data("\x1b\x5bH") # move to home
+
+			clip.each { |delay, data|
+				$logger.debug("delay of #{delay}, data.length = #{data.length}")
+				send_data(data)
+
+				select(nil, nil, nil, delay / 6)
+			}
+		end
+
+	end
+
 	def post_init
 		@MM = MovieMaker.instance()
-		# consume output from mm
-		# XXX, reset the terminal
-		# indicate that we want to consume from moviemaker
+		
+		Thread.new { play_movie() } 
 	end
 
 	def receive_data(data)
 		# should not be sent data, so hang up ?
-	end
-
-	def unbind()
-		# unregister consumation :>
 	end
 end
 

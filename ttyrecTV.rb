@@ -192,14 +192,19 @@ class MovieMaker
 	def initialize
 		@clips = Queue.new()
 		@oldclips = []
+		@ocmutex = Mutex.new
 		Thread.new { play_old_clips }
 	end
 
 	def push(item)
 		@clips.push(item)
 
-		@oldclips.shift() if @oldclips.length >= 8
-		@oldclips.push(item)
+		@ocmutex.synchronize {
+			@oldclips.shift() if @oldclips.length >= 8
+			@oldclips.push(item)
+
+			@oldclips.shuffle!
+		}
 	end
 
 	def play_old_clips
@@ -209,7 +214,7 @@ class MovieMaker
 				next if @oldclips.size == 0
 				next if @clips.num_waiting() == 0
 
-				$logger.debug("Movie clips is empty, with #{@clips.num_waiting()} readers, playing old clips")
+				$logger.warn("Movie clips is empty, with #{@clips.num_waiting()} readers, playing old clips")
 
 				@clips.num_waiting().times do
 					@clips.push(@oldclips[rand(@oldclips.size)])
@@ -260,7 +265,16 @@ class MoviePlayer < EventMachine::Connection
 		return delay * 0.30
 	end
 
+	def log_client()
+		port, *ip_parts = get_peername[2,6].unpack("nC4")
+		ip = ip_parts.join(".")
+
+		$logger.warn("Client connected -- from #{ip}:#{port}")
+	end
+	
 	def post_init
+		log_client()
+
 		@MM = MovieMaker.instance()
 		
 		Thread.new { play_movie() } 
@@ -292,7 +306,7 @@ if(ARGV.length > 0) then
 end
 
 EventMachine::run do
-	EventMachine::add_periodic_timer(2) do
+	EventMachine::add_periodic_timer(10) do
 		Thread.new { scan_processes() }
 	end
 

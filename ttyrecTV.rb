@@ -72,7 +72,7 @@ module FileHandler
 		
 			ts = Float(t1) + (Float(t2) / 1000000) # XXX, Float?
 
-			@basets ||= ts 
+			@basets ||= ts.floor
 			adj_ts = ts - @basets
 
 			$logger.debug("length is #{len}, adjusted timestamp is #{adj_ts}")
@@ -141,7 +141,7 @@ class TimeFilter
 			break if timestamp.nil?	# End of File :>
 
 			# Keep a record of the first timestamp
-			prev_ts ||= timestamp
+			prev_ts ||= timestamp.floor
 
 			# Convert to relative time stamp for delaying
 			adj_ts = timestamp - prev_ts
@@ -203,6 +203,9 @@ class MovieMaker
 			select(nil, nil, nil, 1)
 			if(@clips.empty?) then
 				next if @oldclips.size == 0
+				next if @clips.num_waiting() == 0
+
+				$logger.debug("Movie clips is empty, with #{@clips.num_waiting()} readers, playing old clips")
 
 				@clips.num_waiting().times do
 					@clips.push(@oldclips[rand(@oldclips.size)])
@@ -228,13 +231,24 @@ class MoviePlayer < EventMachine::Connection
 			send_data("\x1b\x5b2J") # reset screen
 			send_data("\x1b\x5bH") # move to home
 
-			clip.each { |delay, data|
-				$logger.debug("delay of #{delay}, data.length = #{data.length}")
+			clip.each { |orig_delay, data|
+				delay = keep_viewers_interested(orig_delay)
+
+				$logger.debug("sending #{data.length} bytes. original delay = #{orig_delay}, waiting #{delay} instead")
+
 				send_data(data)
-				select(nil, nil, nil, delay * 0.50)
-			}
+
+				select(nil, nil, nil, delay)
+
+				# XXX, account for drift/clockskew?
+			}	
 		end
 
+	end
+
+	def keep_viewers_interested(delay)
+		return 1.0 if delay >= 1
+		return delay * 0.80
 	end
 
 	def post_init

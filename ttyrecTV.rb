@@ -10,7 +10,7 @@ Thread.abort_on_exception = true
 
 $seen = {}
 $logger = Logger.new('crap.log')
-$logger.level = Logger::WARN
+$logger.level = Logger::INFO
 
 # Loop over the processes and find active ttyrec processes. Extracts
 # the filename from the process and monitors it. Stops monitoring files
@@ -204,7 +204,7 @@ class MovieMaker
 			@oldclips.push(item)
 
 			@oldclips.shuffle!
-		}
+		}		
 	end
 
 	def play_old_clips
@@ -214,7 +214,7 @@ class MovieMaker
 				next if @oldclips.size == 0
 				next if @clips.num_waiting() == 0
 
-				$logger.warn("Movie clips is empty, with #{@clips.num_waiting()} readers, playing old clips")
+				$logger.info("Movie clips is empty, with #{@clips.num_waiting()} readers, playing old clips")
 
 				@clips.num_waiting().times do
 					@clips.push(@oldclips[rand(@oldclips.size)])
@@ -232,7 +232,7 @@ class MoviePlayer < EventMachine::Connection
 		# producer/consumer might be better, @MM pushes us
 		# a clip to display, etc. can schedule a write later
 
-		$logger.debug("Waiting for new movie clip")
+		$logger.debug("Waiting for new movie clip (#{@MM.clips.length()} on queue)")
 		clip = @MM.clips.pop()
 		$logger.debug("got new movie clip, resetting client")
 
@@ -269,7 +269,7 @@ class MoviePlayer < EventMachine::Connection
 		port, *ip_parts = get_peername[2,6].unpack("nC4")
 		ip = ip_parts.join(".")
 
-		$logger.warn("Client connected -- from #{ip}:#{port}")
+		$logger.info("Client connected -- from #{ip}:#{port}")
 	end
 	
 	def post_init

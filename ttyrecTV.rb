@@ -4,12 +4,13 @@ require 'eventmachine'
 require 'logger'
 require 'thread'
 require 'singleton'
+require 'optparse'
 
 Thread.abort_on_exception = true
 
 $seen = {}
 $logger = Logger.new('crap.log')
-$logger.level = Logger::DEBUG
+$logger.level = Logger::WARN
 
 # Loop over the processes and find active ttyrec processes. Extracts
 # the filename from the process and monitors it. Stops monitoring files
@@ -256,7 +257,7 @@ class MoviePlayer < EventMachine::Connection
 
 	def keep_viewers_interested(delay)
 		return 1.0 if delay >= 1
-		return delay * 0.75
+		return delay * 0.30
 	end
 
 	def post_init
@@ -269,6 +270,17 @@ class MoviePlayer < EventMachine::Connection
 		# should not be sent data, so hang up ?
 	end
 end
+
+options = { :debug => false }
+OptionParser.new do |opts|
+	opts.banner = "Usage: ttyrecTV.rb [options] [files to preload]"
+
+	opts.on("-d", "--[no-]debug", "Set debug mode") do |v|
+		options[:debug] = v
+	end
+end.parse!
+
+$logger.level = Logger::DEBUG if options[:debug]
 
 if(ARGV.length > 0) then
 	ARGV.each { |arg|

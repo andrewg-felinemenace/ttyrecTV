@@ -223,35 +223,40 @@ end
 # MoviePlayer fetches movies and streams them to the client. 
 class MoviePlayer < EventMachine::Connection
 	def play_movie
-		while(true) do
-			# producer/consumer might be better, @MM pushes us
-			# a clip to display, etc. can schedule a write later
+		# producer/consumer might be better, @MM pushes us
+		# a clip to display, etc. can schedule a write later
 
-			$logger.debug("Waiting for new movie clip")
-			clip = @MM.clips.pop()
-			$logger.debug("got new movie clip, resetting client")
+		$logger.debug("Waiting for new movie clip")
+		clip = @MM.clips.pop()
+		$logger.debug("got new movie clip, resetting client")
 
-			send_data("\x1b\x5b2J") # reset screen
-			send_data("\x1b\x5bH") # move to home
+		send_data("\x1b\x5b2J") # reset screen
+		send_data("\x1b\x5bH") # move to home
 
-			clip.each { |orig_delay, data|
-				delay = keep_viewers_interested(orig_delay)
+		reschedule = 0
 
-				$logger.debug("sending #{data.length} bytes. original delay = #{orig_delay}, waiting #{delay} instead")
+		clip.each { |orig_delay, data|
+			delay = keep_viewers_interested(orig_delay)
 
+			EventMachine::add_timer(reschedule + delay) do 
 				send_data(data)
-				# print data 
-				select(nil, nil, nil, delay)
+			end
 
-				# XXX, account for drift/clockskew?
-			}	
+			reschedule += delay
+
+			$logger.debug("scheduled write of #{data.length} bytes. original delay = #{orig_delay}, waiting #{delay} instead")
+
+		}	
+
+		EventMachine::add_timer(reschedule) do
+			Thread.new { play_movie }
 		end
 
 	end
 
 	def keep_viewers_interested(delay)
 		return 1.0 if delay >= 1
-		return delay * 0.80
+		return delay * 0.75
 	end
 
 	def post_init

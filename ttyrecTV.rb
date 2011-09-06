@@ -31,10 +31,7 @@ def scan_processes()
 
 		$logger.debug("Got a new file to monitor (#{filename})")
 
-		EM.next_tick {
-			$seen[filename] = EM.watch_file(filename, FileHandler)
-		}
-
+		$seen[filename] = FileHandler.new(filename)
 	}
 
 	# Handle files no longer being written to
@@ -42,11 +39,9 @@ def scan_processes()
 	old = $seen.keys() - active
 
 	old.each { |filename| 
-		EM.next_tick {
-			$logger.debug("ttyrec stopped on (#{filename})")
-			$seen[filename].stop_watching()
-			$seen.delete(filename)
-		}
+		$logger.debug("ttyrec stopped on (#{filename})")
+		Thread.new { $seen[filename].stop() }
+		$seen.delete(filename)
 	}
 
 end
@@ -54,63 +49,71 @@ end
 # FileHandler is responsible for reading from the ttyrec files and sending
 # each frame off to the TimeFilter thread.
 #
-# XXX - convert this to pure reading and not use notification.. bit racy etc.
-#
 # This converts from absolute time of day format to relative to beginning of
 # file.
 
-module FileHandler
-	def process_frames
-		fp = open(path, "r")
-		fp.seek(@offset)
+class FileHandler	
+	def read_frames
+		@fp.seek(@offset)
 
-		while(true) do
-			header = fp.read(12)
+		while(@run) do
+			header = @fp.read(12)
 			return if header.nil?
 
 			t1, t2, len = header.unpack("VVV")
 		
 			ts = Float(t1) + (Float(t2) / 1000000) # XXX, Float?
 
-			@basets ||= ts.floor
-			adj_ts = ts - @basets
-
-			$logger.debug("length is #{len}, adjusted timestamp is #{adj_ts}")
-		
-			data = fp.read(len)
+			data = @fp.read(len)
 			return if data.nil?
+
+			$logger.debug("read #{len} bytes from #{@path}. timestamp is #{ts}")
 
 			#print data
 
 			@offset += 12 + len
 
-			@TS.queue.push([ adj_ts, data ])
+			@TS.queue.push([ ts, data ])
 
 		end
-
-		fp.close()
-
-
 	end
 
-	def initialize
+	def file_reader()
+		begin 
+			read_frames()
+			select(nil, nil, nil, 0.10)
+		end while(@tail)
+	end
+
+	def initialize(path, tail=true)
+
+		@path = path
+		@fp = open(path, 'r')
 		@offset = 0
-		@lock = Mutex.new
 		@TS = TimeFilter.new(path)
-	end
 
-	def file_modified
-		$logger.debug("#{path} modified")
-		Thread.new { 
-			# Not entirely race proof
-			if(@lock.try_lock()) then
-				process_frames() 
-			end
+		# Keep processing file
+		@run = true
+
+		# Tail file for new data
+		@tail = tail
+	
+		# Create thread to monitor file
+		@thread = Thread.new { 
+			file_reader() 
+			@TS.queue << nil # indicate EOF
 		}
 	end
 
-	def unbind
-		@TS.queue << nil # indicate EOF
+	def stop
+		@tail = false
+		@run = false
+
+		finish()
+	end
+
+	def finish
+		@thread.join()
 	end
 end
 
@@ -237,7 +240,7 @@ class MoviePlayer < EventMachine::Connection
 				$logger.debug("sending #{data.length} bytes. original delay = #{orig_delay}, waiting #{delay} instead")
 
 				send_data(data)
-
+				# print data 
 				select(nil, nil, nil, delay)
 
 				# XXX, account for drift/clockskew?
@@ -260,6 +263,15 @@ class MoviePlayer < EventMachine::Connection
 	def receive_data(data)
 		# should not be sent data, so hang up ?
 	end
+end
+
+if(ARGV.length > 0) then
+	ARGV.each { |arg|
+		fh = FileHandler.new(arg, false)
+		puts "[*] Parsing #{arg}"
+		fh.finish()
+	}
+	puts "[*] Done!"
 end
 
 EventMachine::run do

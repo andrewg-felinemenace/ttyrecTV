@@ -54,6 +54,8 @@ end
 # file.
 
 class FileHandler	
+	attr_reader :path, :offset
+
 	def read_frames
 		@fp.seek(@offset)
 
@@ -87,7 +89,6 @@ class FileHandler
 	end
 
 	def initialize(path, tail=true)
-
 		@path = path
 		@fp = open(path, 'r')
 		@offset = 0
@@ -229,9 +230,6 @@ end
 # MoviePlayer fetches movies and streams them to the client. 
 class MoviePlayer < EventMachine::Connection
 	def play_movie
-		# producer/consumer might be better, @MM pushes us
-		# a clip to display, etc. can schedule a write later
-
 		$logger.debug("Waiting for new movie clip (#{@MM.clips.length()} on queue)")
 		clip = @MM.clips.pop()
 		$logger.debug("got new movie clip, resetting client")
@@ -272,16 +270,119 @@ class MoviePlayer < EventMachine::Connection
 		$logger.info("Client connected -- from #{ip}:#{port}")
 	end
 	
+	def banner
+
+		send_data(' _   _                      _______     __' + "\r\n")
+		send_data('| |_| |_ _   _ _ __ ___  __|_   _\ \   / /' + "\r\n")
+		send_data('| __| __| | | | \'__/ _ \/ __|| |  \ \ / /' + "\r\n")
+		send_data('| |_| |_| |_| | | |  __/ (__ | |   \ V /' + "\r\n")
+		send_data(' \__|\__|\__, |_|  \___|\___||_|    \_/' + "\r\n")
+		send_data('         |___/' +"\r\n")                            
+
+		send_data("[ https://github.com/andrewg-felinemenace/ttyrecTV ]\n")
+		send_data("[ There are #{@MM.clips.size} clips in queue to be displayed ]\n")
+	end
+
 	def post_init
 		log_client()
 
+
 		@MM = MovieMaker.instance()
 		
-		Thread.new { play_movie() } 
+		Thread.new { 
+			banner()
+			select(nil, nil, nil, 1)
+			play_movie() 
+		} 
 	end
 
 	def receive_data(data)
 		# should not be sent data, so hang up ?
+	end
+end
+
+module KeyboardHandler
+	include EventMachine::Protocols::LineText2
+
+	def prompt
+		print "ttyrecTV> "
+		STDOUT.flush
+	end
+
+	def post_init
+		@MM = MovieMaker.instance()
+		prompt
+	end
+
+	def files(commands)
+		return if commands.nil?
+		
+		case commands[0]
+		when "list"
+			puts "monitoring following files (path, offset)"
+			puts "--------------------------"
+
+			$seen.each { |key, value|
+				puts "#{value.path} - #{value.offset}"
+			}
+
+		else
+			puts "don't know about #{commands[0]}"
+		end
+	end
+
+	def clip(commands)
+		return if commands.nil?
+
+		case commands[0]
+		when "size"
+			puts "clip size is #{@MM.clips.size}"
+		when "flush"
+			puts "flushing queue"
+
+			exception = false
+			size = 0
+			begin
+				begin
+					@MM.clips.pop(true)
+				rescue ThreadError => err
+					exception = true
+				end	
+			end while (exception == false)
+
+			puts "clip queue flushed"
+		when "queue"
+			file = commands[1]
+			if(file.nil?) then
+				puts "no file specified to queue"
+				return
+			end
+			puts "attempting to queue #{file}"
+
+			Thread.new { 
+				fh = FileHandler.new(file)
+				fh.finish()
+			}
+		else
+			puts "don't know about #{commands[0]}"
+		end
+	end
+
+	def receive_line(data)
+		words = data.split(" ")
+
+		case words[0]
+		when "clip"
+			clip(words[1..-1])	
+		when "file"
+			files(words[1..-1])
+		else
+			puts "sorry, don't understand \"#{data}\""
+			puts "clip [ size | flush | queue ]"
+			puts "file [ list ]"
+		end
+
+		prompt
 	end
 end
 
@@ -311,4 +412,6 @@ EventMachine::run do
 	end
 
 	EventMachine::start_server("0.0.0.0", 10000, MoviePlayer)
+
+	EventMachine::open_keyboard(KeyboardHandler)
 end		

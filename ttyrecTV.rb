@@ -89,10 +89,12 @@ class FileHandler
 	end
 
 	def initialize(path, tail=true)
+		@fp = open(path, 'r') rescue nil
+		$logger.warn("failed to open #{path}") if @fp.nil?
+
 		@path = path
-		@fp = open(path, 'r')
 		@offset = 0
-		@TS = TimeFilter.new(path)
+		@TS = TimeFilter.new(path) if @fp
 
 		# Keep processing file
 		@run = true
@@ -104,7 +106,7 @@ class FileHandler
 		@thread = Thread.new { 
 			file_reader() 
 			@TS.queue << nil # indicate EOF
-		}
+		} if @fp
 	end
 
 	def stop
@@ -115,11 +117,9 @@ class FileHandler
 	end
 
 	def finish
-		@thread.join()
+		@thread.join() if @fp
 	end
 end
-
-SECONDS = 30
 
 class TimeFilter
 	attr_accessor :queue
@@ -320,7 +320,7 @@ module KeyboardHandler
 		case commands[0]
 		when "list"
 			puts "monitoring following files (path, offset)"
-			puts "--------------------------"
+			puts "-----------------------------------------"
 
 			$seen.each { |key, value|
 				puts "#{value.path} - #{value.offset}"
@@ -368,6 +368,28 @@ module KeyboardHandler
 		end
 	end
 
+	def debug(commands)
+		return if commands.nil?
+
+		case commands[0]
+		when "seconds"
+			puts "SECONDS is #{SECONDS}"
+		when "argv"
+			puts "arguments as follows"
+			ARGV.each { |a|
+				puts "- #{a}"
+			}
+		else
+			puts "don't know how to handle #{commands[0]}"
+		end
+	end
+
+	def help()
+		puts "clip [ size | flush | queue ]"
+		puts "file [ list ]"
+		puts "debug [ seconds | argv ]"
+	end
+
 	def receive_line(data)
 		words = data.split(" ")
 
@@ -376,26 +398,36 @@ module KeyboardHandler
 			clip(words[1..-1])	
 		when "file"
 			files(words[1..-1])
+		when "debug"
+			debug(words[1..-1])
+		when "help"
+			help()
 		else
 			puts "sorry, don't understand \"#{data}\""
-			puts "clip [ size | flush | queue ]"
-			puts "file [ list ]"
+			help()
 		end
 
 		prompt
 	end
 end
 
-options = { :debug => false }
+options = { :debug => false, :seconds => 30 }
+
 OptionParser.new do |opts|
 	opts.banner = "Usage: ttyrecTV.rb [options] [files to preload]"
 
 	opts.on("-d", "--[no-]debug", "Set debug mode") do |v|
 		options[:debug] = v
 	end
+
+	opts.on("-s", "--seconds SECONDS", Integer, "Clip time frame") do |v|
+		options[:seconds] = v
+	end
+
 end.parse!
 
 $logger.level = Logger::DEBUG if options[:debug]
+SECONDS = options[:seconds]
 
 if(ARGV.length > 0) then
 	ARGV.each { |arg|
